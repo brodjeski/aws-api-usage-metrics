@@ -1,0 +1,483 @@
+{
+    "AWSTemplateFormatVersion": "2010-09-09",
+    "Description": "Deploy Lambda function and alarms for API Gateway quota usage.  Capture usage data and publish % utilization to CloudWatch",
+    "Parameters": {
+        "ExtractPublishS3Bucket": {
+            "Type": "String",
+            "Description": "S3 bucket containing deployment package"
+        },
+        "ExtractPublishS3Key": {
+            "Type": "String",
+            "Description": "Key pointing to the Lambda function deployment package"
+        },
+        "LambdaRuntime": {
+            "Type": "String",
+            "Description": "Lambda runtime language",
+            "Default": "python3.7"
+        },
+        "LambdaTimeout": {
+            "Type": "Number",
+            "Description": "Function Timeout",
+            "Default": 25
+        },
+        "UsagePlanName": {
+            "Type": "String",
+            "Description": "Usage Plan for tied to the API",
+            "Default": "TestUsagePlan"
+        },
+        "APIID": {
+            "Type": "String",
+            "Description": "ID of API being tracked"
+        },
+        "APIKey": {
+            "Type": "String",
+            "Description": "Name of API Key to be created for the Usage Plan",
+            "Default": "TestAPIKey"
+        },
+        "APIStage": {
+            "Type": "String",
+            "Description": "Stage API is deployed to"
+        },
+        "UtilizationMetricName": {
+            "Type": "String",
+            "Description": "% Utilization CW Metric",
+            "Default": "API Usage"
+        },
+        "AlarmPeriod": {
+            "Type": "Number",
+            "Description": "Number of seconds over which the metric statistic is applied. (Must be 10, 30 or multiple of 60",
+            "Default": 10
+        },
+        "AlarmThreshold": {
+            "Type": "Number",
+            "Description": "Utilization threshold % to trigger alarm",
+            "Default": 10
+        },
+        "LambdaEventTriggerRateValue": {
+            "Type": "Number",
+            "Description": "A positive number for unit of time between utilization Lambda execution runs. This is set low for demonstation purposes",
+            "Default": 5
+        },
+        "LambdaEventTriggerRateUnit": {
+            "Type": "String",
+            "Description": "Unit of time for triggering utilization Lambda function. (Different units are required for value of 1, e.g., 'minute' instead of 'minutes'",
+            "Default": "minutes"
+        },
+        "UsagePlanQuotaLimit": {
+            "Type": "Number",
+            "Description": "Usage Plan Quota Limit",
+            "Default": 10
+        },
+        "UsagePlanQuotaOffset": {
+            "Type": "Number",
+            "Description": "Usage Plan Quota Offset",
+            "Default": 0
+        },
+        "UsagePlanQuotaPeriod": {
+            "Type": "String",
+            "Description": "Usage Plan Quota Period (DAY, WEEK, or MONTH)",
+            "Default": "DAY"
+        },
+        "UsagePlanThrottleBurstLimit": {
+            "Type": "Number",
+            "Description": "Usage Plan Throttle Burst Limit",
+            "Default": 50
+        },
+        "UsagePlanThrottleRateLimit": {
+            "Type": "Number",
+            "Description": "Usage Plan Throttle Rate Limit",
+            "Default": 100
+        },
+        "SNSNotificationTopicName": {
+            "Type": "String",
+            "Description": "SNS Topic to receive alarm notification when utilization threshold is reached",
+            "Default": "APIGatewayThresholdAlarm-1"
+        },
+        "SNSNotificationEmail": {
+            "Type": "String",
+            "Description": "Email address for utilization threshold alert notification"
+        }
+    },
+    "Metadata": {
+        "AWS::CloudFormation::Interface": {
+            "ParameterGroups": [
+                {
+                    "Label": {
+                        "default": "Lambda Function Deployment"
+                    },
+                    "Parameters": [
+                        "ExtractPublishS3Bucket",
+                        "ExtractPublishS3Key",
+                        "LambdaExecutionRole",
+                        "LambdaRuntime",
+                        "LambdaTimeout"
+                    ]
+                },
+                {
+                    "Label": {
+                        "default": "Quota Utilization Metric Generation"
+                    },
+                    "Parameters": [
+                        "UtilizationMetricName",
+                        "AlarmPeriod",
+                        "AlarmThreshold",
+                        "LambdaEventTriggerRateValue",
+                        "LambdaEventTriggerRateUnit"
+                    ]
+                },
+                {
+                    "Label": {
+                        "default": "Stage Related Parameters"
+                    },
+                    "Parameters": [
+                        "UsagePlanName",
+                        "APIKey",
+                        "UsagePlanQuotaLimit",
+                        "UsagePlanQuotaOffset",
+                        "UsagePlanQuotaPeriod",
+                        "UsagePlanQuotaPeriod",
+                        "UsagePlanThrottleBurstLimit",
+                        "UsagePlanThrottleRateLimit"
+                    ]
+                },
+                {
+                    "Label": {
+                        "default": "SNS Notification"
+                    },
+                    "Parameters": [
+                        "SNSNotificationTopicName",
+                        "SNSNotificationEmail"
+                    ]
+                },
+                {
+                    "Label": { 
+                        "default" : "API Information" 
+                    },
+                    "Parameters": [
+                        "APIID",
+                        "APIStage"
+                    ]
+                }
+            ] 
+            
+        }
+    },
+    "Resources": {
+        "APIUsagePlan": {
+            "Type": "AWS::ApiGateway::UsagePlan",
+            "Properties": {
+                "ApiStages": [
+                    {
+                        "ApiId": { "Ref": "APIID" },
+                        "Stage": { "Ref": "APIStage" }
+                    }
+                ],
+                "Description": "Usage plan ",
+                "Quota": {
+                    "Limit": {
+                        "Ref": "UsagePlanQuotaLimit"
+                    },
+                    "Offset": {
+                        "Ref": "UsagePlanQuotaOffset"
+                    },
+                    "Period": {
+                        "Ref": "UsagePlanQuotaPeriod"
+                    }
+                },
+                "Tags": [
+                    {
+                        "Key": "CreateAlarm",
+                        "Value": "True"
+                    }
+                ],
+                "Throttle": {
+                    "BurstLimit": {
+                        "Ref": "UsagePlanThrottleBurstLimit"
+                    },
+                    "RateLimit": {
+                        "Ref": "UsagePlanThrottleRateLimit"
+                    }
+                },
+                "UsagePlanName": {
+                    "Ref": "UsagePlanName"
+                }
+            }
+        },
+        "UsageAPIKey": {
+            "Type": "AWS::ApiGateway::ApiKey",
+            "Properties": {
+                "Description": "API Key associated with the quota",
+                "Enabled": "true",
+                "Name": "TestAPIKey"
+            }
+        },
+        "UsagePlanAPIKeyMap": {
+            "Type": "AWS::ApiGateway::UsagePlanKey",
+            "Properties": {
+                "KeyId": {
+                    "Ref": "UsageAPIKey"
+                },
+                "KeyType": "API_KEY",
+                "UsagePlanId": {
+                    "Ref": "APIUsagePlan"
+                }
+            }
+        },
+        "MetricsExtractPublishLambdaExecPolicy": {
+            "Type": "AWS::IAM::ManagedPolicy",
+            "Properties": {
+                "Description": "Basic execution policy for metrics Lambda function to communicate with CloudWatch logs",
+                "PolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Action": "logs:CreateLogGroup",
+                            "Resource": {
+                                "Fn::Join": [
+                                    "",
+                                    [
+                                        "arn:aws:logs:",
+                                        {
+                                            "Ref": "AWS::Region"
+                                        },
+                                        ":",
+                                        {
+                                            "Ref": "AWS::AccountId"
+                                        },
+                                        ":*"
+                                    ]
+                                ]
+                            }
+                        },
+                        {
+                            "Effect": "Allow",
+                            "Action": [
+                                "logs:CreateLogStream",
+                                "logs:PutLogEvents"
+                            ],
+                            "Resource": [
+                                {
+                                    "Fn::Join": [
+                                        "",
+                                        [
+                                            "arn:aws:logs:",
+                                            {
+                                                "Ref": "AWS::Region"
+                                            },
+                                            ":",
+                                            {
+                                                "Ref": "AWS::AccountId"
+                                            },
+                                            ":log-group:/aws/lambda/usage-metrics:*"
+                                        ]
+                                    ]
+                                }
+                            ]
+                        }
+                    ]
+                },
+                "Roles": [
+                    {
+                        "Ref": "MetricsExtractPublishLambdaRole"
+                    }
+                ]
+            }
+        },
+        "PutMetricPolicy": {
+            "Type": "AWS::IAM::ManagedPolicy",
+            "Properties": {
+                "Description": "Policy allowing Lambda function to put metrics into CloudWatch",
+                "PolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Sid": "VisualEditor0",
+                            "Effect": "Allow",
+                            "Action": "cloudwatch:PutMetricData",
+                            "Resource": "*"
+                        }
+                    ]
+                },
+                "Roles": [
+                    {
+                        "Ref": "MetricsExtractPublishLambdaRole"
+                    }
+                ]
+            }
+        },
+        "MetricsExtractPublishLambdaRole": {
+            "Type": "AWS::IAM::Role",
+            "Properties": {
+                "RoleName": "MetricsExtractPublishLambdaRole",
+                "Description": "Role to execute Lambda function querying usage plan quota utilization and putting metric into CloudWatch",
+                "ManagedPolicyArns": [
+                    "arn:aws:iam::aws:policy/AmazonAPIGatewayAdministrator"
+                ],
+                "AssumeRolePolicyDocument": {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Effect": "Allow",
+                            "Principal": {
+                                "Service": "lambda.amazonaws.com"
+                            },
+                            "Action": "sts:AssumeRole"
+                        }
+                    ]
+                }
+            }
+        },
+        "MetricsExtractPublishLambdaEventPermission": {
+            "Type": "AWS::Lambda::Permission",
+            "Properties": {
+                "Action": "lambda:InvokeFunction",
+                "FunctionName": {
+                    "Ref": "MetricsExtractPublishLambda"
+                },
+                "Principal": "events.amazonaws.com",
+                "SourceArn": {
+                    "Fn::GetAtt": [
+                        "UtilizationLambdaTimedTriggerEvent",
+                        "Arn"
+                    ]
+                }
+            }
+        },
+        "MetricsExtractPublishLambda": {
+            "Type": "AWS::Lambda::Function",
+            "Properties": {
+                "Code": {
+                    "S3Bucket": {
+                        "Ref": "ExtractPublishS3Bucket"
+                    },
+                    "S3Key": {
+                        "Ref": "ExtractPublishS3Key"
+                    }
+                },
+                "Description": "Lambda function to extract usage data and publish to CloudWatch Metrics",
+                "FunctionName": "usage-metrics",
+                "Handler": "lambda_function.lambda_handler",
+                "Role": {
+                    "Fn::GetAtt": [
+                        "MetricsExtractPublishLambdaRole",
+                        "Arn"
+                    ]
+                },
+                "Runtime": {
+                    "Ref": "LambdaRuntime"
+                },
+                "Timeout": {
+                    "Ref": "LambdaTimeout"
+                }
+            }
+        },
+        "UtilizationLambdaTimedTriggerEvent": {
+            "Type": "AWS::Events::Rule",
+            "Properties": {
+                "Description": "Event that triggers the utilization quota Lambda function",
+                "Name": "Quota-utilization-lambda-trigger",
+                "ScheduleExpression": {
+                    "Fn::Join": [
+                        "",
+                        [
+                            "rate(",
+                            {
+                                "Ref": "LambdaEventTriggerRateValue"
+                            },
+                            " ",
+                            {
+                                "Ref": "LambdaEventTriggerRateUnit"
+                            },
+                            ")"
+                        ]
+                    ]
+                },
+                "State": "ENABLED",
+                "Targets": [
+                    {
+                        "Arn": {
+                            "Fn::GetAtt": [
+                                "MetricsExtractPublishLambda",
+                                "Arn"
+                            ]
+                        },
+                        "Id": "UtilizationLambdaFunction"
+                    }
+                ]
+            }
+        },
+        "MetricsCWAlarm": {
+            "Type": "AWS::CloudWatch::Alarm",
+            "Properties": {
+                "AlarmName": "API Utilization Threshold Alarm",
+                "AlarmDescription": "Alarm to trigger when utilization reaches the defined threshold",
+                "MetricName": {
+                    "Ref": "UtilizationMetricName"
+                },
+                "AlarmActions": [
+                    {
+                        "Ref": "AlarmAlertTargetSNS"
+                    }
+                ],
+                "ComparisonOperator": "GreaterThanOrEqualToThreshold",
+                "DatapointsToAlarm": 1,
+                "Dimensions": [
+                    {
+                        "Name": "Usage Plan",
+                        "Value": {
+                            "Ref": "UsagePlanName"
+                        }
+                    },
+                    {
+                        "Name": "API Key",
+                        "Value": {
+                            "Ref": "APIKey"
+                        }
+                    }
+                ],
+                "Namespace": "/APIGateway/Utilization",
+                "Statistic": "Sum",
+                "Period": {
+                    "Ref": "AlarmPeriod"
+                },
+                "EvaluationPeriods": 1,
+                "Threshold": {
+                    "Ref": "AlarmThreshold"
+                }
+            }
+        },
+        "AlarmAlertTargetSNS": {
+            "Type": "AWS::SNS::Topic",
+            "Properties": {
+                "DisplayName": "API Utilization Notification",
+                "TopicName": {
+                    "Ref": "SNSNotificationTopicName"
+                }
+            }
+        },
+        "AlarmSNSSubscription": {
+            "Type": "AWS::SNS::Subscription",
+            "Properties": {
+                "Endpoint": {
+                    "Ref": "SNSNotificationEmail"
+                },
+                "Protocol": "email",
+                "TopicArn": {
+                    "Ref": "AlarmAlertTargetSNS"
+                }
+            }
+        }
+    },
+    "Outputs": {
+        "AlarmSNSTopicArn": {
+            "Description": "The SNS Topic SRN used as an Alarm Action",
+            "Value": {
+                "Ref": "AlarmAlertTargetSNS"
+            },
+            "Export": {
+                "Name": "AlarmSNSTopicArn"
+            }
+        }
+    }
+}
