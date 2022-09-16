@@ -43,6 +43,11 @@
             "Description": "% Utilization CW Metric",
             "Default": "API Usage"
         },
+        "UtilizationMetricNamespace": {
+            "Type": "String",
+            "Description": "Namespace for the utilization metric",
+            "Default": "/User/APIGateway/Utilization"
+        },
         "AlarmPeriod": {
             "Type": "Number",
             "Description": "Number of seconds over which the metric statistic is applied. (Must be 10, 30 or multiple of 60",
@@ -119,6 +124,7 @@
                     },
                     "Parameters": [
                         "UtilizationMetricName",
+                        "UtilizationMetricNamespace",
                         "AlarmPeriod",
                         "AlarmThreshold",
                         "LambdaEventTriggerRateValue",
@@ -348,16 +354,107 @@
             "Type": "AWS::Lambda::Function",
             "Properties": {
                 "Code": {
-                    "S3Bucket": {
-                        "Ref": "ExtractPublishS3Bucket"
-                    },
-                    "S3Key": {
-                        "Ref": "ExtractPublishS3Key"
+                    "ZipFile" : {
+                        "Fn::Join" : [
+                            "\n", [
+                            "import boto3",
+                            "import json",
+                            "import datetime",
+                            "import os",
+                            "from datetime import date",
+                            "from botocore.exceptions import ClientError",
+                            "#",
+                            "# Get usage data",
+                            "#",
+                            "#   Constants",
+                            "DATA_USED = 0",
+                            "DATA_REMAINING = 1",
+                            "usagePlanId = ''",
+                            "keyId = ''",
+                            "metrics = {}",
+                            "ns = os.environ['METRIC_NAMESPACE']",
+                            "def lambda_handler( event, context ):",
+                            "#",
+                            "# Get usage data",
+                            "#",
+                            "    print( event )",
+                            "    build_metrics()",
+                            "    print( 'Metrics: ' + str(metrics) )",
+                            "    if metrics:",
+                            "        publish_metrics()",
+                            "    else:",
+                            "        print( 'No metrics to publish')",
+                            "##################################################################################",
+                            "def build_metrics():",
+                            "    print( 'In build_metrics')",
+                            "    current_date = date.today()",
+                            "    api_client = boto3.client( 'apigateway' )",
+                            "    plan_response = api_client.get_usage_plans()",
+                            "    print( 'Usage Plans: ' + str(plan_response) )",
+                            "    for item in plan_response['items']:",
+                            "        up_name = item['name']",
+                            "        #print( 'UP Name: '' + up_name )",
+                            "        up_id = item['id']",
+                            "        print( 'UP Id: ' + item['id'] )",
+                            "        key_response = api_client.get_usage_plan_keys( usagePlanId = item['id'] )",
+                            "        print('API Keys: ' + str(key_response))",
+                            "        for key_item in key_response['items']:",
+                            "            key_name = key_item['name']",
+                            "            print( 'API Key: ' + key_name )",
+                            "            print( 'API Key Id: ' + key_item['id'] )",
+                            "            usage_response = api_client.get_usage(",
+                            "                       usagePlanId = item['id'],",
+                            "                        keyId =  key_item['id'],",
+                            "                        startDate = str( current_date ),",
+                            "                       endDate = str( current_date ),",
+                            "                        )",
+                            "            print( 'Usage: ' + str(usage_response))",
+                            "            if usage_response['items']:",
+                            "               for api_key in usage_response['items']:",
+                            "                   utilization = usage_response['items'][api_key][0][0] / (usage_response['items'][api_key][0][DATA_USED] + usage_response['items'][api_key][0][DATA_REMAINING]) * 100",
+                            "                   metric_dimension = (up_name, key_name)",
+                            "                   metrics[metric_dimension] = utilization",
+                            "################################################################################",
+                            "def publish_metrics():",
+                            "        print('------In publish_metrics--------------')",
+                            "        cw_client = boto3.client( 'cloudwatch' )",
+                            "        for metric in metrics:",
+                            "            up_name = metric[0]",
+                            "            api_key = metric[1]",
+                            "            utilization = float( metrics[metric] )",
+                            "            response = cw_client.put_metric_data(",
+                            "               Namespace = ns,",
+                            "                MetricData = [",
+                            "                   {",
+                            "                       'MetricName' : 'API Usage',",
+                            "                        'Dimensions' : [",
+                            "                            {",
+                            "                                'Name' : 'Usage Plan',",
+                            "                                'Value' : up_name",
+                            "                            },",
+                            "                            {",
+                            "                                'Name' : 'API Key',",
+                            "                                'Value' : api_key",
+                            "                            }",
+                            "                        ],",
+                            "                       'Value' : utilization,",
+                            "                        'StorageResolution' : 60,",
+                            "                        'Unit' : 'Percent'",
+                            "                    }",
+                            "                ]",
+                            "            )",
+                            "            print('Put metric: ' + str(response))",
+                            "            print(str(up_name) + ' ' + str(api_key) + ' ' + str(utilization)  )"
+                            ]
+                        ]
                     }
                 },
                 "Description": "Lambda function to extract usage data and publish to CloudWatch Metrics",
                 "FunctionName": "usage-metrics",
-                "Handler": "lambda_function.lambda_handler",
+                "Handler": "index.lambda_handler",
+                "Environment" : {
+                    "Variables" : { "METRIC_NAMESPACE" : { "Ref": "UtilizationMetricNamespace"} }
+                },
                 "Role": {
                     "Fn::GetAtt": [
                         "MetricsExtractPublishLambdaRole",
@@ -436,7 +533,7 @@
                         }
                     }
                 ],
-                "Namespace": "/APIGateway/Utilization",
+                "Namespace": {"Ref" : "UtilizationMetricNamespace"},
                 "Statistic": "Sum",
                 "Period": {
                     "Ref": "AlarmPeriod"
