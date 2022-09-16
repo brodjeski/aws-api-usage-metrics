@@ -2,14 +2,6 @@
     "AWSTemplateFormatVersion": "2010-09-09",
     "Description": "Deploy Lambda function and alarms for API Gateway quota usage.  Capture usage data and publish % utilization to CloudWatch",
     "Parameters": {
-        "ExtractPublishS3Bucket": {
-            "Type": "String",
-            "Description": "S3 bucket containing deployment package"
-        },
-        "ExtractPublishS3Key": {
-            "Type": "String",
-            "Description": "Key pointing to the Lambda function deployment package"
-        },
         "LambdaRuntime": {
             "Type": "String",
             "Description": "Lambda runtime language",
@@ -111,8 +103,6 @@
                         "default": "Lambda Function Deployment"
                     },
                     "Parameters": [
-                        "ExtractPublishS3Bucket",
-                        "ExtractPublishS3Key",
                         "LambdaExecutionRole",
                         "LambdaRuntime",
                         "LambdaTimeout"
